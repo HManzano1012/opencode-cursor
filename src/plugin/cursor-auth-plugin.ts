@@ -1,13 +1,17 @@
 import type {
+  Config,
   Hooks,
   Plugin,
   PluginInput,
   PluginModule,
   PluginOptions,
+  ProviderHookContext,
 } from "@opencode-ai/plugin";
+import type { Auth, Model as ModelV2, Provider as ProviderV2 } from "@opencode-ai/sdk/v2";
 import {
   generateCursorAuthParams,
   getTokenExpiry,
+  loadStoredCursorCredentials,
   pollCursorAuth,
   refreshCursorToken,
 } from "../auth";
@@ -22,16 +26,100 @@ import { getCursorModels, type CursorModel } from "../models";
 import {
   buildCursorProviderModels,
   buildDisabledProviderConfig,
-  type ProviderWithModels,
+  buildPlaceholderProviderModels,
+  getProviderModelsForHook,
+  hasDiscoveredProviderModels,
+  setCachedProviderModels,
   setProviderModels,
 } from "../provider/models";
 import { startProxy, stopProxy } from "../proxy";
 
 let lastModelDiscoveryError: string | null = null;
-const PLUGIN_ID = "@playwo/opencode-cursor-oauth";
+const PLUGIN_ID = "@hmanzano1012/opencode-cursor-oauth";
 
 interface MutableConfig {
-  provider?: Record<string, { name?: string; models?: Record<string, unknown> }>;
+  provider?: Record<
+    string,
+    { name?: string; models?: Record<string, unknown> }
+  >;
+}
+
+async function resolveAccessToken(
+  input: PluginInput,
+  getAuth: () => Promise<Auth>,
+): Promise<string> {
+  const auth = await getAuth();
+  if (!auth || auth.type !== "oauth") {
+    throw new Error("Cursor auth not configured");
+  }
+
+  if (!auth.access || auth.expires < Date.now()) {
+    const refreshed = await refreshCursorToken(auth.refresh);
+    await input.client.auth.set({
+      path: { id: CURSOR_PROVIDER_ID },
+      body: {
+        type: "oauth",
+        refresh: refreshed.refresh,
+        access: refreshed.access,
+        expires: refreshed.expires,
+      },
+    });
+    return refreshed.access;
+  }
+
+  return auth.access;
+}
+
+async function activateCursorProvider(
+  input: PluginInput,
+  getAuth: () => Promise<Auth>,
+  provider?: unknown,
+): Promise<{
+  baseURL: string;
+  apiKey: string;
+  models: Record<string, unknown>;
+}> {
+  const accessToken = await resolveAccessToken(input, getAuth);
+  const models: CursorModel[] = await getCursorModels(accessToken);
+  lastModelDiscoveryError = null;
+
+  const port = await startProxy(async () => {
+    return resolveAccessToken(input, getAuth);
+  }, models);
+
+  const providerModels = buildCursorProviderModels(models, port);
+  setCachedProviderModels(providerModels);
+  if (provider) {
+    setProviderModels(provider, providerModels);
+  }
+
+  return {
+    baseURL: `http://localhost:${port}/v1`,
+    apiKey: "cursor-proxy",
+    models: providerModels,
+  };
+}
+
+async function warmCacheAfterOAuth(
+  input: PluginInput,
+  accessToken: string,
+  refreshToken: string,
+): Promise<void> {
+  try {
+    const getAuth = async (): Promise<Auth> => ({
+      type: "oauth",
+      access: accessToken,
+      refresh: refreshToken,
+      expires: getTokenExpiry(accessToken),
+    });
+    await activateCursorProvider(input, getAuth);
+  } catch (error) {
+    logPluginWarn("Cursor post-login model warmup failed", {
+      stage: "oauth_callback_warmup",
+      ...errorDetails(error),
+    });
+    setCachedProviderModels(null);
+  }
 }
 
 export const server: Plugin = async (
@@ -41,80 +129,72 @@ export const server: Plugin = async (
   configurePluginLogger(input);
 
   const hooks = {
-    async config(config) {
+    async config(config: Config) {
       const mutableConfig = config as MutableConfig;
       mutableConfig.provider ??= {};
-      mutableConfig.provider[CURSOR_PROVIDER_ID] ??= {
+      const existing = mutableConfig.provider[CURSOR_PROVIDER_ID];
+      let models = {
+        ...buildPlaceholderProviderModels(),
+        ...(existing?.models ?? {}),
+      };
+
+      const storedAuth = await loadStoredCursorCredentials();
+      if (storedAuth) {
+        try {
+          const activated = await activateCursorProvider(input, async () => ({
+            type: "oauth",
+            access: storedAuth.access,
+            refresh: storedAuth.refresh,
+            expires: storedAuth.expires,
+          }));
+          models = activated.models;
+        } catch (error) {
+          logPluginWarn("Cursor config warmup failed", {
+            stage: "config",
+            providerID: CURSOR_PROVIDER_ID,
+            ...errorDetails(error),
+          });
+        }
+      }
+
+      mutableConfig.provider[CURSOR_PROVIDER_ID] = {
         name: "Cursor",
+        ...existing,
+        models,
       };
     },
 
     provider: {
       id: CURSOR_PROVIDER_ID,
-      async models(provider: ProviderWithModels) {
-        return (provider.models as Record<string, unknown> | undefined) ?? {};
+      async models(provider: ProviderV2, ctx: ProviderHookContext) {
+        if (!hasDiscoveredProviderModels() && ctx.auth?.type === "oauth") {
+          try {
+            await activateCursorProvider(input, async () => ctx.auth!, provider);
+          } catch (error) {
+            logPluginWarn("Cursor provider model listing failed", {
+              stage: "provider_models",
+              providerID: CURSOR_PROVIDER_ID,
+              ...errorDetails(error),
+            });
+            stopProxy();
+            setCachedProviderModels(null);
+            setProviderModels(provider, buildPlaceholderProviderModels());
+          }
+        }
+
+        return getProviderModelsForHook() as Record<string, ModelV2>;
       },
     },
 
     auth: {
       provider: CURSOR_PROVIDER_ID,
 
-      async loader(getAuth, provider) {
+      async loader(getAuth: () => Promise<Auth>, provider) {
         try {
           const auth = await getAuth();
           if (!auth || auth.type !== "oauth") return {};
 
-          let accessToken = auth.access;
-          if (!accessToken || auth.expires < Date.now()) {
-            const refreshed = await refreshCursorToken(auth.refresh);
-            await input.client.auth.set({
-              path: { id: CURSOR_PROVIDER_ID },
-              body: {
-                type: "oauth",
-                refresh: refreshed.refresh,
-                access: refreshed.access,
-                expires: refreshed.expires,
-              },
-            });
-            accessToken = refreshed.access;
-          }
-
-          const models: CursorModel[] = await getCursorModels(accessToken);
-          lastModelDiscoveryError = null;
-          const port = await startProxy(async () => {
-            const currentAuth = await getAuth();
-            if (currentAuth.type !== "oauth") {
-              const authError = new Error("Cursor auth not configured");
-              logPluginError("Cursor proxy access token lookup failed", {
-                stage: "proxy_access_token",
-                ...errorDetails(authError),
-              });
-              throw authError;
-            }
-
-            if (!currentAuth.access || currentAuth.expires < Date.now()) {
-              const refreshed = await refreshCursorToken(currentAuth.refresh);
-              await input.client.auth.set({
-                path: { id: CURSOR_PROVIDER_ID },
-                body: {
-                  type: "oauth",
-                  refresh: refreshed.refresh,
-                  access: refreshed.access,
-                  expires: refreshed.expires,
-                },
-              });
-              return refreshed.access;
-            }
-
-            return currentAuth.access;
-          }, models);
-
-          setProviderModels(provider, buildCursorProviderModels(models, port));
-
-          return {
-            baseURL: `http://localhost:${port}/v1`,
-            apiKey: "cursor-proxy",
-          };
+          return await activateCursorProvider(input, getAuth, provider);
         } catch (error) {
           const message =
             error instanceof Error
@@ -128,7 +208,8 @@ export const server: Plugin = async (
           });
 
           stopProxy();
-          setProviderModels(provider, {});
+          setCachedProviderModels(null);
+          setProviderModels(provider, buildPlaceholderProviderModels());
 
           if (message !== lastModelDiscoveryError) {
             lastModelDiscoveryError = message;
@@ -141,7 +222,7 @@ export const server: Plugin = async (
 
       methods: [
         {
-          type: "oauth",
+          type: "oauth" as const,
           label: "Login with Cursor",
           async authorize() {
             const { verifier, uuid, loginUrl } =
@@ -157,6 +238,8 @@ export const server: Plugin = async (
                   uuid,
                   verifier,
                 );
+
+                await warmCacheAfterOAuth(input, accessToken, refreshToken);
 
                 return {
                   type: "success" as const,
@@ -179,12 +262,7 @@ export const server: Plugin = async (
         output.headers["x-opencode-agent"] = incoming.agent;
       }
     },
-  } as Hooks & {
-    provider: {
-      id: string;
-      models(provider: ProviderWithModels): Promise<Record<string, unknown>>;
-    };
-  };
+  } satisfies Hooks;
 
   return hooks;
 };

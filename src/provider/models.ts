@@ -2,8 +2,35 @@ import { CURSOR_PROVIDER_ID } from "../constants";
 import type { CursorModel } from "../models";
 import { estimateModelCost } from "./model-cost";
 
+export const CURSOR_PLACEHOLDER_MODEL_ID = "cursor-login" as const;
+
 export interface ProviderWithModels {
   models?: Record<string, unknown>;
+}
+
+let cachedProviderModels: Record<string, unknown> | null = null;
+
+export function getProviderModelsForHook(): Record<string, unknown> {
+  if (cachedProviderModels && Object.keys(cachedProviderModels).length > 0) {
+    return cachedProviderModels;
+  }
+  return buildPlaceholderProviderModels();
+}
+
+export function hasDiscoveredProviderModels(): boolean {
+  if (!cachedProviderModels) return false;
+  const modelIDs = Object.keys(cachedProviderModels);
+  return (
+    modelIDs.length > 0 &&
+    !(modelIDs.length === 1 && modelIDs[0] === CURSOR_PLACEHOLDER_MODEL_ID)
+  );
+}
+
+export function setCachedProviderModels(
+  models: Record<string, unknown> | null,
+): void {
+  cachedProviderModels =
+    models && Object.keys(models).length > 0 ? models : null;
 }
 
 export function setProviderModels(
@@ -12,6 +39,50 @@ export function setProviderModels(
 ): void {
   if (!provider || typeof provider !== "object") return;
   (provider as ProviderWithModels).models = models;
+  setCachedProviderModels(models);
+}
+
+export function buildPlaceholderProviderModels(): Record<string, unknown> {
+  return {
+    [CURSOR_PLACEHOLDER_MODEL_ID]: {
+      id: CURSOR_PLACEHOLDER_MODEL_ID,
+      providerID: CURSOR_PROVIDER_ID,
+      api: {
+        id: CURSOR_PLACEHOLDER_MODEL_ID,
+        url: "http://127.0.0.1/cursor-pending/v1",
+        npm: "@ai-sdk/openai-compatible",
+      },
+      name: "Sign in with Cursor",
+      capabilities: {
+        temperature: true,
+        reasoning: false,
+        attachment: false,
+        toolcall: true,
+        input: {
+          text: true,
+          audio: false,
+          image: false,
+          video: false,
+          pdf: false,
+        },
+        output: {
+          text: true,
+          audio: false,
+          image: false,
+          video: false,
+          pdf: false,
+        },
+        interleaved: false,
+      },
+      cost: { input: 0, output: 0, cache: { read: 0, write: 0 } },
+      limit: { context: 0, output: 0 },
+      status: "active" as const,
+      options: {},
+      headers: {},
+      release_date: "",
+      variants: {},
+    },
+  };
 }
 
 export function buildCursorProviderModels(

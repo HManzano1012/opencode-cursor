@@ -1,3 +1,5 @@
+import { readFile } from "node:fs/promises";
+import { join } from "node:path";
 import { generatePKCE } from "./pkce";
 import { errorDetails, logPluginError, logPluginWarn } from "./logger";
 
@@ -24,6 +26,16 @@ export interface CursorCredentials {
   refresh: string;
   expires: number;
 }
+
+type StoredAuthFile = Record<
+  string,
+  {
+    type?: unknown;
+    access?: unknown;
+    refresh?: unknown;
+    expires?: unknown;
+  }
+>;
 
 export async function generateCursorAuthParams(): Promise<CursorAuthParams> {
   const { verifier, challenge } = await generatePKCE();
@@ -162,4 +174,40 @@ export function getTokenExpiry(token: string): number {
     }
   } catch {}
   return Date.now() + 3600 * 1000;
+}
+
+export async function loadStoredCursorCredentials(): Promise<
+  CursorCredentials | undefined
+> {
+  const dataDir = process.env.XDG_DATA_HOME ?? join(process.env.HOME ?? "", ".local", "share");
+  const authPath = join(dataDir, "opencode", "auth.json");
+
+  try {
+    const raw = await readFile(authPath, "utf8");
+    const parsed = JSON.parse(raw) as StoredAuthFile;
+    const auth = parsed.cursor;
+
+    if (!auth || auth.type !== "oauth") return;
+    if (typeof auth.access !== "string" || typeof auth.refresh !== "string") {
+      return;
+    }
+
+    return {
+      access: auth.access,
+      refresh: auth.refresh,
+      expires:
+        typeof auth.expires === "number"
+          ? auth.expires
+          : getTokenExpiry(auth.access),
+    };
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
+
+    logPluginWarn("Failed to load stored Cursor auth", {
+      stage: "stored_auth",
+      authPath,
+      ...errorDetails(error),
+    });
+    return;
+  }
 }
