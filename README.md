@@ -1,9 +1,24 @@
 # opencode-cursor-oauth
 
-## Disclaimer
+Personal fork maintained by [HManzano1012](https://github.com/HManzano1012) — [HManzano1012/opencode-cursor](https://github.com/HManzano1012/opencode-cursor).
+
+## Fork lineage
 
 > [!NOTE]
-> This project is a **fork** of [ephraimduncan/opencode-cursor](https://github.com/ephraimduncan/opencode-cursor). Upstream may differ in behavior, features, or maintenance; treat this repository as its own line of development.
+> **Maintainer:** [HManzano1012](https://github.com/HManzano1012) — [HManzano1012/opencode-cursor](https://github.com/HManzano1012/opencode-cursor).
+>
+> **Fork lineage:** [ephraimduncan/opencode-cursor](https://github.com/ephraimduncan/opencode-cursor) → [PoolPirate/opencode-cursor](https://github.com/PoolPirate/opencode-cursor) (npm: `@playwo/opencode-cursor-oauth`) → this repository (npm: `@hmanzano1012/opencode-cursor-oauth`).
+>
+> This is an independent fork. It is not endorsed by the original authors, PoolPirate, or Cursor.
+
+## Changes in this fork
+
+- Fixes Cursor model list after OAuth: real models appear instead of only the `cursor-login` placeholder (`Sign in with Cursor`).
+- Unified `activateCursorProvider()`; `auth.loader` updates the provider and returns models; `provider.models` discovers via OAuth when cache is empty; `config()` hydrates models from stored OAuth credentials.
+- `loadStoredCursorCredentials()` reads OpenCode auth from `~/.local/share/opencode/`.
+- Placeholder `cursor-login`, discovery cache, and helpers in `provider/models.ts`.
+- OpenCode `>=1.14.18`, `@opencode-ai/plugin` ^1.16.2; regression tests for loader, `provider.models`, and `config` with saved auth.
+- Technical notes: [docs/plans/2026-06-08-cursor-provider-compatibility.md](docs/plans/2026-06-08-cursor-provider-compatibility.md), [docs/architecture/how-it-works.md](docs/architecture/how-it-works.md).
 
 ## What it does
 
@@ -16,25 +31,25 @@ This is an [OpenCode](https://opencode.ai) plugin that lets you use **Cursor clo
 
 There are **no extra runtime requirements** beyond what OpenCode already needs: you do not install Node, Python, or Docker separately for this plugin. Enable it in OpenCode’s config and complete login in the UI.
 
-This package targets the OpenCode `1.3.4+` plugin system and ships a dedicated server plugin entrypoint for modern OpenCode releases.
+This package targets OpenCode `1.14.18+` (tested through `1.16.x`) and ships a dedicated server plugin entrypoint (`exports["./server"]`).
 
 ## Install
 
 Install the plugin package with OpenCode:
 
 ```bash
-opencode plugin @playwo/opencode-cursor-oauth
+opencode plugin @hmanzano1012/opencode-cursor-oauth
 ```
 
 Or add the package to your OpenCode configuration manually (for example `opencode.json`):
 
 ```json
 {
-  "plugin": ["@playwo/opencode-cursor-oauth"]
+  "plugin": ["@hmanzano1012/opencode-cursor-oauth"]
 }
 ```
 
-OpenCode `1.3.4+` can discover this package as a server plugin automatically. You need **OpenCode 1.3.4+** and a **Cursor account** with API/model access.
+You need **OpenCode 1.14.18+** and a **Cursor account** with API/model access. Add the package to `opencode.json` under `"plugin"`.
 
 ## Connect auth and use it
 
@@ -50,4 +65,4 @@ If something fails, check that you are signed into the correct Cursor account an
 This integration can be **buggy** or break when Cursor or OpenCode change their APIs or UI.
 
 > [!TIP]
-> If you hit problems, missing models, or confusing errors, please **[open an issue](https://github.com/PoolPirate/opencode-cursor/issues)** on this repository with steps to reproduce and logs or screenshots when possible.
+> If you hit problems, missing models, or confusing errors, please **[open an issue](https://github.com/HManzano1012/opencode-cursor/issues)** on this repository with steps to reproduce and logs or screenshots when possible.

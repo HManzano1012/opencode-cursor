@@ -1,8 +1,9 @@
 {
-  "name": "@playwo/opencode-cursor-oauth",
-  "version": "0.4.3",
+  "name": "@hmanzano1012/opencode-cursor-oauth",
+  "version": "0.5.0",
   "description": "OpenCode plugin that connects Cursor's API to OpenCode via OAuth, model discovery, and a local OpenAI-compatible proxy.",
   "license": "MIT",
+  "author": "HManzano1012",
   "type": "module",
   "main": "./dist/index.js",
   "module": "./dist/index.js",
@@ -20,7 +21,7 @@
     }
   },
   "engines": {
-    "opencode": "^1.3.4"
+    "opencode": ">=1.14.18"
   },
   "oc-plugin": [
     "server"
@@ -30,15 +31,16 @@
   ],
   "scripts": {
     "build": "node ./scripts/build.mjs",
+    "test": "bun test",
     "prepublishOnly": "npm run build"
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/PoolPirate/opencode-cursor.git"
+    "url": "git+https://github.com/HManzano1012/opencode-cursor.git"
   },
-  "homepage": "https://github.com/PoolPirate/opencode-cursor#readme",
+  "homepage": "https://github.com/HManzano1012/opencode-cursor#readme",
   "bugs": {
-    "url": "https://github.com/PoolPirate/opencode-cursor/issues"
+    "url": "https://github.com/HManzano1012/opencode-cursor/issues"
   },
   "keywords": [
     "opencode",
@@ -51,8 +53,8 @@
     "access": "public"
   },
   "dependencies": {
-    "@opencode-ai/plugin": "^1.3.4",
     "@bufbuild/protobuf": "^2.0.0",
+    "@opencode-ai/plugin": "^1.16.2",
     "zod": "^3.24.0"
   },
   "devDependencies": {
