@@ -646,6 +646,15 @@ function handleExecMessage(
     return;
   }
 
+  if (execCase === undefined) {
+    logPluginWarn("Received Cursor exec message with no case set, sending empty result", {
+      execId: execMsg.execId,
+      execMsgId: execMsg.id,
+    });
+    sendUnknownExecResult(execMsg, sendFrame);
+    return;
+  }
+
   // --- Handle remaining unsupported native tools ---
   const REJECT_REASON =
     "Tool not available in this environment. Use the MCP tools provided instead.";
