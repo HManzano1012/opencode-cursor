@@ -46,23 +46,6 @@ import { redirectNativeExecToTool } from "./native-tools";
 import type { StreamState } from "./stream-state";
 import type { PendingExec } from "./types";
 
-export interface UnhandledExecInfo {
-  execCase: string;
-  execId: string;
-  execMsgId: number;
-}
-
-export interface UnsupportedServerMessageInfo {
-  category:
-  | "agentMessage"
-  | "interactionUpdate"
-  | "interactionQuery"
-  | "execServerControl"
-  | "toolCall";
-  caseName: string;
-  detail?: string;
-}
-
 export interface McpToolCallUpdateInfo {
   updateCase: "partialToolCall" | "toolCallStarted" | "toolCallCompleted";
   toolCallId: string;
@@ -230,8 +213,6 @@ export function processServerMessage(
   onStepUpdate?: (info: StepUpdateInfo) => void,
   onCheckpoint?: (checkpointBytes: Uint8Array) => void,
   onTurnEnded?: () => void,
-  onUnsupportedMessage?: (info: UnsupportedServerMessageInfo) => void,
-  onUnhandledExec?: (info: UnhandledExecInfo) => void,
 ): void {
   const msgCase = msg.message.case;
 
@@ -263,7 +244,6 @@ export function processServerMessage(
       onMcpToolCallUpdate,
       onStepUpdate,
       onTurnEnded,
-      onUnsupportedMessage,
     );
   } else if (msgCase === "kvServerMessage") {
     handleKvMessage(msg.message.value as KvServerMessage, blobStore, sendFrame);
@@ -275,18 +255,17 @@ export function processServerMessage(
       sendFrame,
       state,
       onMcpExec,
-      onUnhandledExec,
     );
   } else if (msgCase === "execServerControlMessage") {
-    onUnsupportedMessage?.({
-      category: "execServerControl",
-      caseName: msg.message.value.message.case ?? "undefined",
-    });
+    ignoreUnknownCursorSignal(
+      "execServerControl",
+      msg.message.value.message.case,
+      msg.message.value,
+    );
   } else if (msgCase === "interactionQuery") {
     handleInteractionQuery(
       msg.message.value as InteractionQuery,
       sendFrame,
-      onUnsupportedMessage,
     );
   } else if (msgCase === "conversationCheckpointUpdate") {
     const stateStructure = msg.message.value as ConversationStateStructure;
@@ -298,10 +277,7 @@ export function processServerMessage(
       onCheckpoint(toBinary(ConversationStateStructureSchema, stateStructure));
     }
   } else {
-    onUnsupportedMessage?.({
-      category: "agentMessage",
-      caseName: msgCase ?? "undefined",
-    });
+    ignoreUnknownCursorSignal("agentMessage", msgCase, msg);
   }
 }
 
@@ -312,7 +288,6 @@ function handleInteractionUpdate(
   onMcpToolCallUpdate?: (info: McpToolCallUpdateInfo) => void,
   onStepUpdate?: (info: StepUpdateInfo) => void,
   onTurnEnded?: () => void,
-  onUnsupportedMessage?: (info: UnsupportedServerMessageInfo) => void,
 ): void {
   const updateCase = update.message?.case;
 
@@ -384,15 +359,13 @@ function handleInteractionUpdate(
     updateCase === "summaryStarted" ||
     updateCase === "summaryCompleted" ||
     updateCase === "heartbeat" ||
+    updateCase === "shellOutputDelta" ||
     updateCase === "stepStarted" ||
     updateCase === "stepCompleted"
   ) {
     return;
   } else {
-    onUnsupportedMessage?.({
-      category: "interactionUpdate",
-      caseName: updateCase ?? "undefined",
-    });
+    ignoreUnknownCursorSignal("interactionUpdate", updateCase, update);
   }
   // Interaction tool-call updates are informational only. Resumable MCP tool
   // execution comes from execServerMessage.mcpArgs.
@@ -401,7 +374,6 @@ function handleInteractionUpdate(
 function handleInteractionQuery(
   query: InteractionQuery,
   sendFrame: (data: Uint8Array) => void,
-  onUnsupportedMessage?: (info: UnsupportedServerMessageInfo) => void,
 ): void {
   const queryCase = query.query.case;
 
@@ -577,7 +549,6 @@ function handleExecMessage(
   sendFrame: (data: Uint8Array) => void,
   state: StreamState,
   onMcpExec: (exec: PendingExec) => void,
-  onUnhandledExec?: (info: UnhandledExecInfo) => void,
 ): void {
   const execCase = execMsg.message.case;
 
@@ -647,11 +618,7 @@ function handleExecMessage(
   }
 
   if (execCase === undefined) {
-    logPluginWarn("Received Cursor exec message with no case set, sending empty result", {
-      execId: execMsg.execId,
-      execMsgId: execMsg.id,
-    });
-    sendUnknownExecResult(execMsg, sendFrame);
+    acknowledgeUnknownExec(execMsg, sendFrame);
     return;
   }
 
@@ -725,17 +692,7 @@ function handleExecMessage(
     return;
   }
 
-  logPluginWarn("Unhandled Cursor exec type, sending empty result", {
-    execCase: execCase ?? "undefined",
-    execId: execMsg.execId,
-    execMsgId: execMsg.id,
-  });
-  sendUnknownExecResult(execMsg, sendFrame);
-  onUnhandledExec?.({
-    execCase: execCase ?? "undefined",
-    execId: execMsg.execId,
-    execMsgId: execMsg.id,
-  });
+  acknowledgeUnknownExec(execMsg, sendFrame);
 }
 
 /** Send an exec client message back to Cursor. */
@@ -773,28 +730,79 @@ function sendExecStreamClose(
   sendFrame(toBinary(AgentClientMessageSchema, clientMessage));
 }
 
-function sendUnknownExecResult(
+function ignoreUnknownCursorSignal(
+  category: string,
+  caseName: string | undefined,
+  message: object,
+): void {
+  logPluginWarn("Ignoring unsupported Cursor signal without closing the bridge", {
+    category,
+    caseName: caseName ?? "undefined",
+    unknownFieldNos: listUnknownProtoFields(message).map((field) => field.no),
+  });
+}
+
+const EXEC_RESERVED_FIELD_NOS = new Set([1, 15, 19]);
+
+type UnknownProtoField = {
+  no: number;
+  wireType: number;
+  data: Uint8Array;
+};
+
+function listUnknownProtoFields(message: object): UnknownProtoField[] {
+  const withUnknown = message as {
+    $unknown?: UnknownProtoField[];
+    getUnknown?: () => UnknownProtoField[] | undefined;
+  };
+  return withUnknown.getUnknown?.() ?? withUnknown.$unknown ?? [];
+}
+
+function setUnknownProtoFields(
+  message: object,
+  fields: UnknownProtoField[],
+): void {
+  const withUnknown = message as {
+    $unknown?: UnknownProtoField[];
+    setUnknown?: (fields: UnknownProtoField[]) => void;
+  };
+  withUnknown.$unknown = fields;
+  withUnknown.setUnknown?.(fields);
+}
+
+/**
+ * Ack exec types missing from this proto so AgentService/Run stays open.
+ * Echoes an empty payload on the unknown args field number when present.
+ */
+function acknowledgeUnknownExec(
   execMsg: ExecServerMessage,
   sendFrame: (data: Uint8Array) => void,
 ): void {
-  const unknownFields: Array<{ no: number; wireType: number; data: Uint8Array }> | undefined = (
-    execMsg as any
-  ).$unknown;
-  const argsField = unknownFields?.find(
-    (field) => field.wireType === 2 && field.no !== 1 && field.no !== 15 && field.no !== 19,
+  const unknownFields = listUnknownProtoFields(execMsg);
+  const argsField = unknownFields.find(
+    (field) => field.wireType === 2 && !EXEC_RESERVED_FIELD_NOS.has(field.no),
   );
-  if (!argsField) return;
 
-  const execClientMessage = create(ExecClientMessageSchema, {
-    id: execMsg.id,
+  logPluginWarn("Acknowledging unsupported Cursor exec without closing the bridge", {
+    execCase: execMsg.message.case ?? "undefined",
     execId: execMsg.execId,
+    execMsgId: execMsg.id,
+    unknownFieldNos: unknownFields.map((field) => field.no),
+    echoedFieldNo: argsField?.no,
   });
-  (execClientMessage as any).$unknown = [
-    { no: argsField.no, wireType: 2, data: new Uint8Array(0) },
-  ];
-  const clientMessage = create(AgentClientMessageSchema, {
-    message: { case: "execClientMessage", value: execClientMessage },
-  });
-  sendFrame(toBinary(AgentClientMessageSchema, clientMessage));
+
+  if (argsField) {
+    const execClientMessage = create(ExecClientMessageSchema, {
+      id: execMsg.id,
+      execId: execMsg.execId,
+    });
+    setUnknownProtoFields(execClientMessage, [
+      { no: argsField.no, wireType: 2, data: new Uint8Array([0]) },
+    ]);
+    const clientMessage = create(AgentClientMessageSchema, {
+      message: { case: "execClientMessage", value: execClientMessage },
+    });
+    sendFrame(toBinary(AgentClientMessageSchema, clientMessage));
+  }
   sendExecStreamClose(execMsg.id, sendFrame);
 }

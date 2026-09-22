@@ -355,6 +355,7 @@ function createBridgeStreamResponse(
             const serverMessage = fromBinary(
               AgentServerMessageSchema,
               messageBytes,
+              { readUnknownFields: true },
             );
             processServerMessage(
               serverMessage,
@@ -547,34 +548,6 @@ function createBridgeStreamResponse(
                 ) {
                   publishPendingToolCalls("turnEnded");
                 }
-              },
-              (info) => {
-                endStreamError = new Error(
-                  `Cursor returned unsupported ${info.category}: ${info.caseName}${info.detail ? ` (${info.detail})` : ""}`,
-                );
-                logPluginError("Closing Cursor bridge after unsupported message", {
-                  modelId,
-                  bridgeKey,
-                  convKey,
-                  category: info.category,
-                  caseName: info.caseName,
-                  detail: info.detail,
-                });
-                scheduleBridgeEnd(bridge);
-              },
-              (info) => {
-                endStreamError = new Error(
-                  `Cursor requested unsupported exec type: ${info.execCase}`,
-                );
-                logPluginError("Closing Cursor bridge after unsupported exec", {
-                  modelId,
-                  bridgeKey,
-                  convKey,
-                  execCase: info.execCase,
-                  execId: info.execId,
-                  execMsgId: info.execMsgId,
-                });
-                scheduleBridgeEnd(bridge);
               },
             );
           } catch {

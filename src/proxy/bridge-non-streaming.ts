@@ -124,6 +124,7 @@ async function collectFullResponse(
           const serverMessage = fromBinary(
             AgentServerMessageSchema,
             messageBytes,
+            { readUnknownFields: true },
           );
           processServerMessage(
             serverMessage,
@@ -172,38 +173,6 @@ async function collectFullResponse(
               ) {
                 scheduleBridgeEnd(bridge);
               }
-            },
-            (info) => {
-              endStreamError = new Error(
-                `Cursor returned unsupported ${info.category}: ${info.caseName}${info.detail ? ` (${info.detail})` : ""}`,
-              );
-              logPluginError(
-                "Closing non-streaming Cursor bridge after unsupported message",
-                {
-                  modelId,
-                  convKey,
-                  category: info.category,
-                  caseName: info.caseName,
-                  detail: info.detail,
-                },
-              );
-              scheduleBridgeEnd(bridge);
-            },
-            (info) => {
-              endStreamError = new Error(
-                `Cursor requested unsupported exec type: ${info.execCase}`,
-              );
-              logPluginError(
-                "Closing non-streaming Cursor bridge after unsupported exec",
-                {
-                  modelId,
-                  convKey,
-                  execCase: info.execCase,
-                  execId: info.execId,
-                  execMsgId: info.execMsgId,
-                },
-              );
-              scheduleBridgeEnd(bridge);
             },
           );
         } catch {
